@@ -326,4 +326,4 @@ if __name__ == "__main__":
     print(f"🔧 Correct: POST http://localhost:8000/api/correct")
     print("="*60 + "\n")
     
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+   
