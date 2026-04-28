@@ -14,7 +14,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, current_dir)
 
 # Import from correct paths based on your folder structure
-from app.agents.Schema_agent import SchemaAgent
+from app.agents.schema_agent import SchemaAgent
 from app.agents.context_agent import ContextAgent
 from app.agents.fairness_agent import FairnessAgent
 from app.agents.correction_agent import CorrectionAgent
