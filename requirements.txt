@@ -17,8 +17,8 @@ google-generativeai==0.3.0
 
 # Embeddings (CPU torch)
 sentence-transformers==2.2.2
-torch==2.2.2+cpu
-torchvision==0.17.2+cpu
+torch==2.6.0+cpu
+torchvision==0.21.0+cpu
 
 # Optional
 requests==2.31.0
