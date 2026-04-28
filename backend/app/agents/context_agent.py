@@ -1,62 +1,71 @@
 import pandas as pd
-from typing import Dict, List
-import google.generativeai as genai
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
+from typing import List
+from app.service.gemini_service import GeminiService
 
 class ContextAgent:
     def __init__(self):
-        # Configure Gemini
-        genai.configure(api_key="AIzaSyB5bKDrUiZRYV8IyEOBE3aLp2tZoJ9Ow7I")
-        self.model = genai.GenerativeModel('gemini-pro')
+        self.gemini = GeminiService()
         
         self.sensitive_patterns = {
-            "race": ["race", "ethnicity", "color"],
-            "gender": ["gender", "sex"],
-            "age": ["age", "dob", "birth"],
-            "religion": ["religion", "faith"],
-            "disability": ["disability", "handicap"],
-            "income": ["income", "salary", "wage"]
+            "race": ["race", "ethnicity", "color", "nationality", "origin"],
+            "gender": ["gender", "sex", "male", "female"],
+            "age": ["age", "dob", "birth", "year"],
+            "religion": ["religion", "faith", "belief"],
+            "disability": ["disability", "handicap", "disabled"],
+            "income": ["income", "salary", "wage", "earnings"],
+            "marital_status": ["marital", "married", "spouse"],
+            "education": ["education", "degree", "qualification"],
+            "location": ["zip", "postal", "address", "city", "state", "country"]
         }
-    
+
     def identify_domain(self, df: pd.DataFrame) -> str:
-        """Identify domain using Gemini API"""
+        """Identify domain using LLM with fallback"""
         columns = df.columns.tolist()
         sample_data = df.head(3).to_dict()
-        
-        prompt = f"""Given these column names and sample data, identify the business domain (finance, healthcare, employment, education, or general):
 
-Columns: {', '.join(columns)}
-Sample data: {sample_data}
+        prompt = f"""Given these column names and sample data, identify the business domain.
+Options: finance, healthcare, employment, education, general
 
-Domain (single word):"""
-        
+Columns: {columns}
+Sample Data: {sample_data}
+
+Return ONLY one word:"""
+
         try:
-            response = self.model.generate_content(prompt)
-            domain = response.text.strip().lower()
-            
-            # Validate domain
+            domain = self.gemini.generate_response(prompt).lower().strip()
             valid_domains = ["finance", "healthcare", "employment", "education", "general"]
-            if domain in valid_domains:
-                return domain
-            
-            return "general"
-        
-        except Exception as e:
-            print(f"Gemini API error: {e}, falling back to rule-based")
+            return domain if domain in valid_domains else self._fallback_domain(columns)
+        except:
             return self._fallback_domain(columns)
-    
+
+    def get_sensitive_columns(self, df: pd.DataFrame) -> List[str]:
+        """Identify sensitive columns using LLM with fallback"""
+        columns = df.columns.tolist()
+        
+        prompt = f"""From these column names, identify which are sensitive/protected attributes 
+(like race, gender, age, religion, disability, income, marital status).
+Return ONLY the column names as comma-separated list. If none, return "none".
+
+Columns: {columns}"""
+
+        try:
+            response = self.gemini.generate_response(prompt)
+            if response.lower() == "none":
+                return self._fallback_sensitive(columns)
+            sensitive_cols = [col.strip() for col in response.split(',')]
+            return [col for col in sensitive_cols if col in columns]
+        except:
+            return self._fallback_sensitive(columns)
+
     def _fallback_domain(self, columns: List[str]) -> str:
-        """Fallback domain detection"""
+        """Rule-based domain detection"""
         column_str = " ".join(columns).lower()
         
         domain_keywords = {
-            "finance": ["loan", "credit", "income", "bank"],
-            "healthcare": ["diagnosis", "patient", "medical", "treatment"],
-            "employment": ["salary", "employee", "hire", "job"],
-            "education": ["grade", "student", "course", "school"]
+            "finance": ["loan", "credit", "income", "bank", "salary", "wage", "approved", "interest"],
+            "healthcare": ["diagnosis", "patient", "medical", "treatment", "hospital"],
+            "employment": ["salary", "employee", "hire", "job", "department", "promotion"],
+            "education": ["grade", "student", "course", "school", "gpa", "attendance"]
         }
         
         scores = {}
@@ -66,30 +75,9 @@ Domain (single word):"""
                 scores[domain] = score
         
         return max(scores, key=scores.get) if scores else "general"
-    
-    def get_sensitive_columns(self, df: pd.DataFrame) -> List[str]:
-        """Use Gemini to identify sensitive columns"""
-        columns = df.columns.tolist()
-        
-        prompt = f"""From these column names, identify which are sensitive/protected attributes (like race, gender, age, religion, disability, income):
-Columns: {', '.join(columns)}
 
-Return only the sensitive column names as a comma-separated list:"""
-        
-        try:
-            response = self.model.generate_content(prompt)
-            sensitive_text = response.text.strip()
-            sensitive_cols = [col.strip() for col in sensitive_text.split(',')]
-            
-            # Only return columns that actually exist
-            return [col for col in sensitive_cols if col in columns]
-        
-        except Exception as e:
-            print(f"Gemini API error: {e}, falling back to pattern matching")
-            return self._fallback_sensitive(columns)
-    
     def _fallback_sensitive(self, columns: List[str]) -> List[str]:
-        """Fallback sensitive column detection"""
+        """Pattern-based sensitive column detection"""
         sensitive_cols = []
         for col in columns:
             col_lower = col.lower()

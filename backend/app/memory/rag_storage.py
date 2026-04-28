@@ -1,4 +1,3 @@
-# rag_storage.py - Without sentence-transformers
 import numpy as np
 from typing import List, Dict, Any, Optional
 import json
@@ -8,7 +7,6 @@ import os
 
 class RAGStorage:
     def __init__(self):
-        # Simple TF-IDF style embedding (no PyTorch needed)
         self.storage_file = "rag_storage.json"
         self.user_data = {}
         self.session_data = {}
@@ -25,117 +23,137 @@ class RAGStorage:
                     self.session_data = data.get('sessions', {})
                     self.pattern_data = data.get('patterns', {})
             except:
-                self.user_data = {}
-                self.session_data = {}
-                self.pattern_data = {}
+                self._reset_data()
+        else:
+            self._reset_data()
+    
+    def _reset_data(self):
+        """Initialize empty data structures"""
+        self.user_data = {}
+        self.session_data = {}
+        self.pattern_data = {}
     
     def save_data(self):
         """Save data to JSON file"""
-        with open(self.storage_file, 'w', encoding='utf-8') as f:
-            json.dump({
-                'users': self.user_data,
-                'sessions': self.session_data,
-                'patterns': self.pattern_data
-            }, f, indent=2)
+        try:
+            with open(self.storage_file, 'w', encoding='utf-8') as f:
+                json.dump({
+                    'users': self.user_data,
+                    'sessions': self.session_data,
+                    'patterns': self.pattern_data
+                }, f, indent=2, default=str)
+        except Exception as e:
+            print(f"Error saving data: {e}")
     
-    def _simple_embedding(self, text: str) -> np.ndarray:
-        """Create simple embedding using character frequencies (no PyTorch)"""
-        # Simple hash-based embedding
-        embedding = np.zeros(64)
-        for i, char in enumerate(text[:1000]):
-            idx = ord(char) % 64
+    def _convert_to_serializable(self, obj):
+        """Convert numpy types to Python native types"""
+        if isinstance(obj, (np.integer,)):
+            return int(obj)
+        elif isinstance(obj, (np.floating,)):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, dict):
+            return {k: self._convert_to_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._convert_to_serializable(v) for v in obj]
+        elif isinstance(obj, (pd.Timestamp if 'pd' in dir() else str)):
+            return str(obj)
+        return obj
+    
+    def _text_to_vector(self, text: str, size: int = 64) -> np.ndarray:
+        """Convert text to vector embedding"""
+        embedding = np.zeros(size)
+        for i, char in enumerate(str(text)[:1000]):
+            idx = ord(char) % size
             embedding[idx] += 1
-        # Normalize
-        if np.linalg.norm(embedding) > 0:
-            embedding = embedding / np.linalg.norm(embedding)
+        
+        norm = np.linalg.norm(embedding)
+        if norm > 0:
+            embedding = embedding / norm
+        
         return embedding
     
     def _cosine_similarity(self, a: np.ndarray, b: np.ndarray) -> float:
-        """Calculate cosine similarity between two vectors"""
-        return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8)
+        """Calculate cosine similarity"""
+        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8))
+    
+    def store_session(self, user_id: str, session_data: Dict) -> str:
+        """Store analysis session"""
+        session_id = f"{user_id}_{int(datetime.now().timestamp())}"
+        
+        # Convert all numpy types to native Python types
+        clean_data = self._convert_to_serializable(session_data)
+        
+        # Create text representation for embedding
+        text_repr = json.dumps(clean_data, default=str)
+        
+        self.session_data[session_id] = {
+            **clean_data,
+            "user_id": str(user_id),
+            "embedding": self._text_to_vector(text_repr).tolist(),
+            "timestamp": datetime.now().isoformat()
+        }
+        self.save_data()
+        return session_id
     
     def store_user_profile(self, user_id: str, user_data: Dict[str, Any]):
         """Store user profile"""
-        self.user_data[user_id] = {
-            **user_data,
-            "embedding": self._simple_embedding(json.dumps(user_data)).tolist(),
+        clean_data = self._convert_to_serializable(user_data)
+        text_repr = json.dumps(clean_data, default=str)
+        
+        self.user_data[str(user_id)] = {
+            **clean_data,
+            "embedding": self._text_to_vector(text_repr).tolist(),
             "timestamp": datetime.now().isoformat()
         }
         self.save_data()
     
-    def store_session(self, user_id: str, session_data: Dict) -> str:
-        """Store session data"""
-        session_id = f"{user_id}_{int(datetime.now().timestamp())}"
+    def store_bias_pattern(self, pattern_data: Dict[str, Any]) -> str:
+        """Store detected bias pattern"""
+        clean_data = self._convert_to_serializable(pattern_data)
+        text_repr = json.dumps(clean_data, default=str)
         
-        self.session_data[session_id] = {
-            **session_data,
-            "user_id": user_id,
-            "embedding": self._simple_embedding(json.dumps(session_data)).tolist(),
+        pattern_id = f"bias_{hashlib.md5(text_repr.encode()).hexdigest()[:12]}"
+        
+        self.pattern_data[pattern_id] = {
+            **clean_data,
+            "pattern_id": pattern_id,
+            "embedding": self._text_to_vector(text_repr).tolist(),
             "timestamp": datetime.now().isoformat()
         }
         self.save_data()
-        
-        return session_id
+        return pattern_id
     
     def retrieve_similar_sessions(self, query: str, user_id: Optional[str] = None, n_results: int = 5) -> List[Dict]:
-        """Retrieve similar sessions using simple similarity"""
-        query_embedding = self._simple_embedding(query)
+        """Retrieve similar sessions"""
+        query_embedding = self._text_to_vector(str(query))
         
         similarities = []
         for sess_id, sess_data in self.session_data.items():
-            if user_id and sess_data.get('user_id') != user_id:
+            if user_id and sess_data.get('user_id') != str(user_id):
                 continue
             
             sess_embedding = np.array(sess_data.get('embedding', np.zeros(64)))
             similarity = self._cosine_similarity(query_embedding, sess_embedding)
             similarities.append((similarity, sess_id, sess_data))
         
-        # Sort by similarity
         similarities.sort(reverse=True, key=lambda x: x[0])
         
         results = []
         for sim, sess_id, sess_data in similarities[:n_results]:
             results.append({
-                "document": json.dumps(sess_data),
+                "session_id": sess_id,
                 "metadata": sess_data,
-                "similarity": float(sim),
-                "session_id": sess_id
+                "similarity": float(sim)
             })
         
         return results
     
-    def get_user_history(self, user_id: str, limit: int = 100) -> List[Dict]:
-        """Get user's historical sessions"""
-        history = []
-        for sess_id, sess_data in self.session_data.items():
-            if sess_data.get('user_id') == user_id:
-                history.append({
-                    "session_data": json.dumps(sess_data),
-                    "metadata": sess_data,
-                    "session_id": sess_id
-                })
-        
-        # Sort by timestamp
-        history.sort(key=lambda x: x['metadata'].get('timestamp', ''), reverse=True)
-        return history[:limit]
-    
-    def store_bias_pattern(self, pattern_data: Dict[str, Any]):
-        """Store bias pattern"""
-        pattern_id = f"pattern_{hashlib.md5(json.dumps(pattern_data).encode()).hexdigest()[:16]}"
-        
-        self.pattern_data[pattern_id] = {
-            **pattern_data,
-            "embedding": self._simple_embedding(json.dumps(pattern_data)).tolist(),
-            "timestamp": datetime.now().isoformat()
-        }
-        self.save_data()
-        
-        return pattern_id
-    
     def retrieve_similar_bias_patterns(self, domain: str, sensitive_attr: str, n_results: int = 3) -> List[Dict]:
         """Retrieve similar bias patterns"""
-        query_text = f"Domain: {domain}, Sensitive Attribute: {sensitive_attr}"
-        query_embedding = self._simple_embedding(query_text)
+        query_text = f"Domain: {domain}, Attribute: {sensitive_attr}"
+        query_embedding = self._text_to_vector(query_text)
         
         similarities = []
         for pat_id, pat_data in self.pattern_data.items():
@@ -148,7 +166,7 @@ class RAGStorage:
         results = []
         for sim, pat_id, pat_data in similarities[:n_results]:
             results.append({
-                "pattern": json.dumps(pat_data),
+                "pattern_id": pat_id,
                 "metadata": pat_data,
                 "similarity": float(sim)
             })
@@ -157,48 +175,36 @@ class RAGStorage:
     
     def update_user_fairness_history(self, user_id: str, fairness_result: Dict[str, Any]):
         """Update user's fairness history"""
-        if user_id in self.user_data:
-            if 'fairness_history' not in self.user_data[user_id]:
-                self.user_data[user_id]['fairness_history'] = []
-            
-            self.user_data[user_id]['fairness_history'].append({
-                "score": fairness_result.get('score', 0),
-                "is_fair": fairness_result.get('is_fair', False),
-                "timestamp": datetime.now().isoformat()
-            })
-            
-            # Update embedding
-            self.user_data[user_id]['embedding'] = self._simple_embedding(
-                json.dumps(self.user_data[user_id])
-            ).tolist()
-            self.save_data()
+        user_id = str(user_id)
+        
+        if user_id not in self.user_data:
+            self.user_data[user_id] = {
+                "embedding": [],
+                "fairness_history": []
+            }
+        
+        if 'fairness_history' not in self.user_data[user_id]:
+            self.user_data[user_id]['fairness_history'] = []
+        
+        # Convert numpy values
+        history_entry = {
+            "score": float(fairness_result.get('score', 0)),
+            "is_fair": bool(fairness_result.get('is_fair', False)),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        self.user_data[user_id]['fairness_history'].append(history_entry)
+        self.save_data()
     
-    def semantic_search_sessions(self, search_text: str, n_results: int = 10) -> List[Dict]:
-        """General semantic search across sessions"""
-        return self.retrieve_similar_sessions(search_text, n_results=n_results)
-    
-    def get_similar_users(self, user_profile: Dict[str, Any], n_results: int = 5) -> List[Dict]:
-        """Find similar users"""
-        query_text = f"Domain: {user_profile.get('domain', 'unknown')}"
-        query_embedding = self._simple_embedding(query_text)
+    def get_user_history(self, user_id: str, limit: int = 10) -> List[Dict]:
+        """Get user's analysis history"""
+        user_sessions = []
+        for sess_id, sess_data in self.session_data.items():
+            if sess_data.get('user_id') == str(user_id):
+                user_sessions.append({
+                    "session_id": sess_id,
+                    "metadata": sess_data
+                })
         
-        similarities = []
-        for uid, udata in self.user_data.items():
-            if uid == user_profile.get('user_id'):
-                continue
-            
-            u_embedding = np.array(udata.get('embedding', np.zeros(64)))
-            similarity = self._cosine_similarity(query_embedding, u_embedding)
-            similarities.append((similarity, uid, udata))
-        
-        similarities.sort(reverse=True, key=lambda x: x[0])
-        
-        results = []
-        for sim, uid, udata in similarities[:n_results]:
-            results.append({
-                "user_id": uid,
-                "metadata": udata,
-                "similarity": float(sim)
-            })
-        
-        return results
+        user_sessions.sort(key=lambda x: x['metadata'].get('timestamp', ''), reverse=True)
+        return user_sessions[:limit]

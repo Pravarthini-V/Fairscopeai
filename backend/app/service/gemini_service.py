@@ -7,9 +7,11 @@ load_dotenv()
 
 class GeminiService:
     def __init__(self):
-        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-        self.model = genai.GenerativeModel('gemini-pro')
-        self.chat = None
+        api_key = os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            raise ValueError("GOOGLE_API_KEY not found in environment")
+        genai.configure(api_key=api_key)
+        self.model = genai.GenerativeModel('gemini-2.0-flash')
     
     def generate_response(self, prompt: str, temperature: float = 0.7) -> str:
         """Generate response from Gemini"""
@@ -26,25 +28,6 @@ class GeminiService:
         except Exception as e:
             print(f"Gemini API error: {e}")
             return ""
-    
-    def start_chat(self, system_prompt: str = None):
-        """Start a chat session"""
-        if system_prompt:
-            self.chat = self.model.start_chat(history=[
-                {"role": "user", "parts": [system_prompt]},
-                {"role": "model", "parts": ["I understand. I'll help with fairness analysis."]}
-            ])
-        else:
-            self.chat = self.model.start_chat()
-        return self.chat
-    
-    def chat_response(self, message: str) -> str:
-        """Send message in chat session"""
-        if not self.chat:
-            self.start_chat()
-        
-        response = self.chat.send_message(message)
-        return response.text.strip()
     
     def analyze_fairness_text(self, fairness_data: Dict[str, Any]) -> str:
         """Specialized fairness analysis with Gemini"""

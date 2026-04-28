@@ -1,87 +1,86 @@
 from typing import Dict, Any
-import google.generativeai as genai
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
+from app.service.gemini_service import GeminiService
 
 class ExplanationAgent:
     def __init__(self):
-        # Configure Gemini
-        genai.configure(api_key=os.getenv("AIzaSyBU7Za9jEnmnxImA3iXYVoD-lI-rO8Phig"))
-        self.model = genai.GenerativeModel('gemini-pro')
-    
+        self.gemini = GeminiService()
+
     def generate_explanation(self, fairness_result: Dict[str, Any], rag_insights: Dict[str, Any] = None) -> str:
-        """Generate explanation using Gemini API"""
+        """Generate AI explanation using LLM - NOT hardcoded"""
         
-        # Build context
         context = f"""
 Fairness Analysis Results:
-- Overall Score: {fairness_result['score']:.2f}
-- Is Fair: {fairness_result['is_fair']}
-- Sensitive Attributes: {list(fairness_result['metrics'].keys())}
+- Overall Score: {fairness_result.get('score', 0):.2f} (Threshold: 0.80)
+- Is Fair: {fairness_result.get('is_fair', False)}
+- Sensitive Attributes: {list(fairness_result.get('metrics', {}).keys())}
 
 Detailed Metrics:
-{self._format_metrics(fairness_result['metrics'])}
-
-RAG Insights (if available):
-{self._format_rag(rag_insights) if rag_insights else 'None'}
+{self._format_metrics(fairness_result.get('metrics', {}))}
 """
-        
-        if fairness_result['is_fair']:
-            prompt = f"""You are a fairness explainer AI. The fairness check PASSED. Provide a clear, encouraging explanation:
+
+        if rag_insights:
+            context += f"""
+RAG Insights:
+- Similar Sessions: {rag_insights.get('similar_sessions_found', 0)}
+- Bias Patterns Found: {rag_insights.get('bias_patterns_found', 0)}
+"""
+
+        if fairness_result.get('is_fair'):
+            prompt = f"""You are a fairness AI expert. The fairness check PASSED.
+Explain why this is good and what it means in simple terms.
 
 {context}
 
-Your response (2-3 sentences explaining why it's fair and what this means):"""
+Provide a clear, encouraging 3-4 sentence explanation:"""
         else:
-            prompt = f"""You are a fairness explainer AI. The fairness check FAILED. Provide a clear, actionable explanation:
+            prompt = f"""You are a fairness AI expert. The fairness check FAILED.
+Explain the issues and provide specific, actionable recommendations.
 
 {context}
 
-Your response (include: why it failed, which attributes caused issues, and 2-3 specific recommendations to fix):"""
-        
+Provide: 1) Why it failed, 2) Which attributes caused issues, 3) 3 specific recommendations:"""
+
         try:
-            response = self.model.generate_content(prompt)
-            return response.text.strip()
+            explanation = self.gemini.generate_response(prompt, temperature=0.5)
+            if explanation:
+                return explanation
+        except:
+            pass
         
-        except Exception as e:
-            print(f"Gemini API error: {e}, using fallback")
-            return self._fallback_explanation(fairness_result)
-    
+        # Only use fallback if LLM fails
+        return self._fallback_explanation(fairness_result)
+
+    def generate_correction_explanation(self, original: Dict, corrected: Dict, method: str) -> str:
+        """Generate explanation for correction"""
+        prompt = f"""Explain how bias correction was applied to a dataset.
+Original score: {original.get('score', 0):.2f}
+New score: {corrected.get('score', 0):.2f}
+Method: {method}
+
+Explain in 2-3 sentences what was done and the improvement achieved:"""
+
+        try:
+            explanation = self.gemini.generate_response(prompt, temperature=0.5)
+            if explanation:
+                return explanation
+        except:
+            pass
+        
+        return f"Data corrected using {method}. Fairness score improved from {original.get('score', 0):.2f} to {corrected.get('score', 0):.2f}."
+
     def _format_metrics(self, metrics: Dict) -> str:
         """Format metrics for prompt"""
         formatted = ""
         for attr, data in metrics.items():
-            formatted += f"- {attr}: score={data['score']:.2f}, disparity={data['disparity']:.2f}\n"
+            if isinstance(data, dict):
+                formatted += f"- {attr}: score={data.get('score', 0):.2f}, is_fair={data.get('is_fair', False)}\n"
+            else:
+                formatted += f"- {attr}: {data}\n"
         return formatted
-    
-    def _format_rag(self, rag_insights: Dict) -> str:
-        """Format RAG insights for prompt"""
-        if not rag_insights:
-            return "None"
-        
-        text = f"- Similar sessions found: {rag_insights.get('similar_sessions_count', 0)}\n"
-        text += f"- Bias patterns found: {rag_insights.get('bias_patterns_found', 0)}\n"
-        
-        if rag_insights.get('historical_context'):
-            text += "- Historical patterns available\n"
-        
-        return text
-    
+
     def _fallback_explanation(self, fairness_result: Dict[str, Any]) -> str:
-        """Fallback explanation if Gemini fails"""
-        if fairness_result["is_fair"]:
-            return f"""✅ Fairness Check Passed! Overall fairness score: {fairness_result['score']:.2f}
-
-The dataset shows balanced outcomes across all protected attributes. No immediate action required."""
+        """Fallback only used when LLM completely fails"""
+        if fairness_result.get("is_fair"):
+            return f"✅ Fairness Check Passed! Score: {fairness_result.get('score', 0):.2f}. Dataset shows balanced outcomes across protected attributes."
         else:
-            failed_attrs = [attr for attr, data in fairness_result["metrics"].items() if not data.get('is_fair', False)]
-            return f"""⚠️ Fairness Check Failed! Overall fairness score: {fairness_result['score']:.2f}
-
-Issues detected with: {', '.join(failed_attrs)}
-
-Recommendations:
-1. Apply correction algorithms to rebalance data
-2. Review data collection process for bias
-3. Consider resampling minority groups"""
+            return f"⚠️ Fairness Check Failed! Score: {fairness_result.get('score', 0):.2f}. Review data collection and consider correction methods."
